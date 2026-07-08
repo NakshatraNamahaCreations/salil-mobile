@@ -1,0 +1,350 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Image,
+  TouchableOpacity,
+  Dimensions,
+  RefreshControl,
+  Platform,
+  FlatList,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+} from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { typography } from "../../src/theme/typography";
+import { spacing } from "../../src/theme/spacing";
+import { useAppDispatch } from "../../src/hooks/useAppDispatch";
+import { useAppSelector } from "../../src/hooks/useAppSelector";
+import {
+  fetchHomeData,
+  fetchWishlist,
+} from "../../src/store/slices/contentSlice";
+import { ContentCarousel } from "../../src/components/carousels/ContentCarousel";
+import { LoadingScreen } from "../../src/components/layout/LoadingScreen";
+import { useTheme } from "../../src/theme/ThemeContext";
+import { LanguagePickerModal, SUPPORTED_LANGUAGES, type LanguageCode } from "../../src/components/LanguagePickerModal";
+
+const LANGUAGE_KEY = "@ebook_selected_language";
+
+const { width } = Dimensions.get("window");
+const BANNER_HEIGHT = 180;
+const SIDE_PADDING = spacing.md;
+const ITEM_GAP = spacing.md;
+const BANNER_WIDTH = width - SIDE_PADDING * 2;
+const AUTO_SCROLL_INTERVAL = 3000;
+
+export default function HomeScreen() {
+  const router = useRouter();
+  const dispatch = useAppDispatch();
+  const { colors } = useTheme();
+  const flatListRef = useRef<FlatList>(null);
+  const currentIndexRef = useRef(0);
+
+  const [activeBanner, setActiveBanner] = useState(0);
+  const [language, setLanguage] = useState<LanguageCode | null>(null);
+  const [languageLoaded, setLanguageLoaded] = useState(false);
+  const [showLanguagePicker, setShowLanguagePicker] = useState(false);
+
+  const {
+    banners,
+    trendingBooks,
+    trendingAudiobooks,
+    trendingPodcasts,
+    isLoading,
+  } = useAppSelector((state) => state.content);
+
+  const { user } = useAppSelector((state) => state.auth);
+
+  // Load saved language on mount.
+  useEffect(() => {
+    (async () => {
+      try {
+        const saved = (await AsyncStorage.getItem(LANGUAGE_KEY)) as LanguageCode | null;
+        if (saved && SUPPORTED_LANGUAGES.some((l) => l.code === saved)) {
+          setLanguage(saved);
+        } else {
+          // No saved language → force the picker on first launch.
+          setShowLanguagePicker(true);
+        }
+      } catch {
+        setShowLanguagePicker(true);
+      } finally {
+        setLanguageLoaded(true);
+      }
+    })();
+  }, []);
+
+  // Refetch whenever the picked language changes (after initial load).
+  useEffect(() => {
+    if (!languageLoaded) return;
+    if (language === null && showLanguagePicker) return; // wait for user to pick
+    loadData(true);
+  }, [language, languageLoaded]);
+
+  const handleLanguagePick = async (code: LanguageCode) => {
+    try {
+      await AsyncStorage.setItem(LANGUAGE_KEY, code);
+    } catch {}
+    setLanguage(code);
+    setShowLanguagePicker(false);
+  };
+
+  const currentLangLabel =
+    SUPPORTED_LANGUAGES.find((l) => l.code === language)?.label ?? "All";
+
+  useEffect(() => {
+    if (!banners?.length || banners.length <= 1) return;
+    const interval = setInterval(() => {
+      const nextIndex =
+        currentIndexRef.current === banners.length - 1
+          ? 0
+          : currentIndexRef.current + 1;
+      flatListRef.current?.scrollToIndex({ index: nextIndex, animated: true });
+      currentIndexRef.current = nextIndex;
+      setActiveBanner(nextIndex);
+    }, AUTO_SCROLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [banners]);
+
+  const loadData = (forceRefresh = false) => {
+    dispatch(fetchHomeData({ forceRefresh, language }));
+    if (user?.id) dispatch(fetchWishlist(user.id));
+  };
+
+  const onMomentumScrollEnd = (
+    event: NativeSyntheticEvent<NativeScrollEvent>,
+  ) => {
+    const offsetX = event.nativeEvent.contentOffset.x;
+    const index = Math.round(offsetX / (BANNER_WIDTH + ITEM_GAP));
+    currentIndexRef.current = index;
+    setActiveBanner(index);
+  };
+
+  const handleScrollToIndexFailed = (info: {
+    index: number;
+    highestMeasuredFrameIndex: number;
+    averageItemLength: number;
+  }) => {
+    setTimeout(() => {
+      flatListRef.current?.scrollToIndex({ index: info.index, animated: true });
+    }, 300);
+  };
+
+  const styles = useMemo(
+    () =>
+      StyleSheet.create({
+        container: { flex: 1, backgroundColor: colors.background },
+        scrollView: { flex: 1 },
+        scrollContent: { paddingBottom: Platform.OS === "ios" ? 110 : 90 },
+        header: {
+          flexDirection: "row",
+          justifyContent: "space-between",
+          alignItems: "center",
+          paddingHorizontal: spacing.md,
+          paddingVertical: spacing.md,
+          paddingTop: spacing.xl,
+          marginTop: 10,
+        },
+        greeting: { ...typography.h2, color: colors.text },
+        subtitle: {
+          ...typography.bodySmall,
+          color: colors.textSecondary,
+          marginTop: 4,
+        },
+        coinBadge: {
+          backgroundColor: colors.backgroundCard,
+          paddingHorizontal: spacing.md,
+          paddingVertical: spacing.sm,
+          borderRadius: 20,
+          borderWidth: 1,
+          borderColor: colors.border,
+        },
+        coinText: {
+          ...typography.body,
+          color: colors.text,
+          fontWeight: "600" as const,
+        },
+        langChip: {
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 6,
+          backgroundColor: colors.backgroundCard,
+          paddingHorizontal: spacing.sm + 2,
+          paddingVertical: 7,
+          borderRadius: 20,
+          borderWidth: 1,
+          borderColor: colors.border,
+          marginRight: spacing.sm,
+          maxWidth: 130,
+        },
+        langChipText: {
+          ...typography.bodySmall,
+          color: colors.text,
+          fontWeight: "600" as const,
+        },
+        bannerListContent: {
+          paddingHorizontal: SIDE_PADDING,
+          paddingTop: spacing.md,
+        },
+        bannerWrapper: { width: BANNER_WIDTH },
+        banner: {
+          width: "100%",
+          height: BANNER_HEIGHT,
+          borderRadius: 16,
+          backgroundColor: colors.backgroundCard,
+        },
+        bannerOverlay: {
+          position: "absolute",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          padding: spacing.md,
+          borderBottomLeftRadius: 16,
+          borderBottomRightRadius: 16,
+          backgroundColor: "rgba(0,0,0,0.45)",
+        },
+        bannerTitle: { ...typography.h3, color: "#fff" },
+        indicatorContainer: {
+          flexDirection: "row",
+          justifyContent: "center",
+          alignItems: "center",
+          marginTop: spacing.md,
+          gap: 8,
+        },
+        indicator: {
+          width: 8,
+          height: 8,
+          borderRadius: 4,
+          backgroundColor: colors.border,
+        },
+        activeIndicator: { width: 22, backgroundColor: colors.primary },
+        content: { paddingVertical: spacing.lg },
+      }),
+    [colors],
+  );
+
+  if (isLoading && banners.length === 0) {
+    return <LoadingScreen />;
+  }
+
+  return (
+    <View style={styles.container}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isLoading}
+            onRefresh={() => loadData(true)}
+            tintColor={colors.primary}
+          />
+        }>
+        <View style={styles.header}>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.greeting} numberOfLines={1}>
+              Hello, {user?.name || "Reader"}!
+            </Text>
+            <Text style={styles.subtitle} numberOfLines={1}>
+              What would you like to explore today?
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.langChip}
+            onPress={() => setShowLanguagePicker(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="language" size={14} color={colors.text} />
+            <Text style={styles.langChipText} numberOfLines={1}>{currentLangLabel}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.push("/wallet")}>
+            <View style={styles.coinBadge}>
+              <Text style={styles.coinText}>🪙 {user?.coin_balance || 0}</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {banners.length > 0 && (
+          <View>
+            <FlatList
+              ref={flatListRef}
+              data={banners}
+              keyExtractor={(item, index) => `${item.id}-${index}`}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              snapToInterval={BANNER_WIDTH + ITEM_GAP}
+              decelerationRate="fast"
+              bounces={false}
+              contentContainerStyle={styles.bannerListContent}
+              ItemSeparatorComponent={() => (
+                <View style={{ width: ITEM_GAP }} />
+              )}
+              onMomentumScrollEnd={onMomentumScrollEnd}
+              onScrollToIndexFailed={handleScrollToIndexFailed}
+              getItemLayout={(_, index) => ({
+                length: BANNER_WIDTH + ITEM_GAP,
+                offset: (BANNER_WIDTH + ITEM_GAP) * index,
+                index,
+              })}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  onPress={() => {
+                    if (item.content_id)
+                      router.push(`/book/${item.content_id}`);
+                  }}
+                  style={styles.bannerWrapper}>
+                  <Image
+                    source={{ uri: item.image }}
+                    style={styles.banner}
+                    resizeMode="cover"
+                  />
+                  {item.title ? (
+                    <View style={styles.bannerOverlay}>
+                      <Text style={styles.bannerTitle}>{item.title}</Text>
+                    </View>
+                  ) : (
+                    <></>
+                  )}
+                </TouchableOpacity>
+              )}
+            />
+            <View style={styles.indicatorContainer}>
+              {banners.map((_, index) => (
+                <View
+                  key={index}
+                  style={[
+                    styles.indicator,
+                    index === activeBanner && styles.activeIndicator,
+                  ]}
+                />
+              ))}
+            </View>
+          </View>
+        )}
+
+        <View style={styles.content}>
+          <ContentCarousel title="Trending Books" items={trendingBooks} />
+          <ContentCarousel
+            title="Popular Audiobooks"
+            items={trendingAudiobooks}
+          />
+          <ContentCarousel title="Trending Podcasts" items={trendingPodcasts} />
+        </View>
+      </ScrollView>
+
+      <LanguagePickerModal
+        visible={showLanguagePicker}
+        current={language}
+        required={language === null}
+        onSelect={handleLanguagePick}
+        onClose={() => setShowLanguagePicker(false)}
+      />
+    </View>
+  );
+}
