@@ -44,3 +44,7 @@ credentials.json
 *.tsbuildinfo
 
 app-example
+
+# Native build artifacts
+ios/Pods/
+ios/build/
