@@ -18,6 +18,7 @@ import { paymentService } from '../../src/services/payment.service';
 import { Content, ContentType } from '../../src/types';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAppSelector } from '../../src/hooks/useAppSelector';
+import { SignInPrompt } from '../../src/components/SignInPrompt';
 
 type Tab = 'purchased' | 'wishlist';
 
@@ -172,6 +173,15 @@ export default function LibraryScreen() {
   const onEndReached = activeTab === 'wishlist' && wishlistState.hasMore && !wishlistState.loadingMore
     ? () => fetchWishlistPage(wishlistState.page + 1, true)
     : undefined;
+
+  if (!user?.id) {
+    return (
+      <SignInPrompt
+        title="Your Library"
+        subtitle="Sign in to see your purchased books and wishlist across all your devices."
+      />
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>

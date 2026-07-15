@@ -72,8 +72,7 @@ export default function LoginScreen() {
     setFormError('');
 
     if (!name.trim()) { setFormError('Full name is required'); return; }
-    if (!phone.trim()) { setFormError('Phone number is required'); return; }
-    if (!PHONE_REGEX.test(phone.trim())) { setFormError('Please enter a valid 10-digit mobile number'); return; }
+    if (phone.trim() && !PHONE_REGEX.test(phone.trim())) { setFormError('Please enter a valid 10-digit mobile number'); return; }
     if (!email.trim()) { setFormError('Email address is required'); return; }
     if (!EMAIL_REGEX.test(email.trim())) { setFormError('Please enter a valid email address'); return; }
     if (!signupPassword) { setFormError('Password is required'); return; }
@@ -210,7 +209,7 @@ export default function LoginScreen() {
                 autoCapitalize="words"
               />
               <TextInput
-                label="Phone Number *"
+                label="Phone Number (optional)"
                 value={phone}
                 onChangeText={(v) => { setPhone(v.replace(/\D/g, '').slice(0, 10)); setFormError(''); }}
                 placeholder="Enter 10-digit mobile number"
@@ -256,6 +255,12 @@ export default function LoginScreen() {
               />
             </View>
           )}
+
+          <TouchableOpacity onPress={() => router.replace('/(tabs)/home')} style={{ marginTop: spacing.lg, alignItems: 'center' }}>
+            <Text style={{ ...typography.body, color: colors.primary, fontWeight: '600' as const }}>
+              Continue browsing as guest
+            </Text>
+          </TouchableOpacity>
 
           <Text style={styles.terms}>
             By continuing, you agree to our Terms of Service and Privacy Policy

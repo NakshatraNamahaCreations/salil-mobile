@@ -47,6 +47,12 @@ import { Button } from '../../src/components/buttons/Button';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { ReviewSection } from '../../src/components/ReviewSection';
 import { getContentSectionLabels } from '../../src/utils/contentLabels';
+import { iapService, appleProductIdFor } from '../../src/services/iap.service';
+
+// On iOS all digital-content purchases must go through Apple In-App Purchase
+// (App Store guideline 3.1.1) — Razorpay, coupons and coin unlocks are
+// Android/web only.
+const IS_IOS = Platform.OS === 'ios';
 
 interface RazorpayOrder {
   order_id: string;
@@ -82,7 +88,29 @@ export default function BookDetailScreen() {
   const [couponLoading, setCouponLoading] = useState(false);
   const [appliedCoupon, setAppliedCoupon] = useState<{ code: string; discountAmount: number; finalAmount: number; description: string } | null>(null);
 
+  // Apple IAP — localized App Store price shown on the Buy button (iOS only)
+  const [iapPrice, setIapPrice] = useState<string | null>(null);
+  const [restoreLoading, setRestoreLoading] = useState(false);
+
   const inWishlist = wishlist.some((item) => item.id === id);
+
+  const iapPurchaseType = (b: Content | null) =>
+    (b as any)?.book_content_type === 'audiobook' ? ('audiobook' as const) : ('ebook' as const);
+  const iapProductId = (b: Content | null) =>
+    appleProductIdFor(id, iapPurchaseType(b), (b as any)?.apple_product_id);
+
+  // Fetch the App Store product price once the book loads (iOS, paid, not owned)
+  useEffect(() => {
+    if (!IS_IOS || !book || isPurchased || book.access_type !== AccessType.PAID) return;
+    let cancelled = false;
+    (async () => {
+      const ok = await iapService.init();
+      if (!ok || cancelled) return;
+      const product = await iapService.getProduct(iapProductId(book));
+      if (!cancelled && product?.displayPrice) setIapPrice(product.displayPrice);
+    })();
+    return () => { cancelled = true; };
+  }, [book?.id, isPurchased]);
 
   // Re-run when `user` becomes available: on a cold start the first pass can run
   // before auth is hydrated from storage, which would skip the purchase / chapter
@@ -231,8 +259,65 @@ export default function BookDetailScreen() {
     }
   };
 
+  const promptSignIn = () => {
+    Alert.alert(
+      'Sign In Required',
+      'Purchases are linked to your account so you can access them on all your devices. Please sign in or create a free account first.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign In', onPress: () => router.push('/login') },
+      ],
+    );
+  };
+
+  // ── iOS: Apple In-App Purchase flow (guideline 3.1.1) ─────────
+  const handleBuyIOS = async () => {
+    if (!book) return;
+    if (!user?.id) { promptSignIn(); return; }
+    setPurchaseLoading(true);
+    try {
+      await iapService.purchase(id, iapPurchaseType(book), iapProductId(book));
+      setIsPurchased(true);
+      Alert.alert('Purchase Complete', `"${book.title}" has been added to your library. Enjoy!`);
+    } catch (err: any) {
+      const code = err?.code ?? '';
+      const msg = String(err?.message ?? '');
+      // User closed the Apple payment sheet — not an error.
+      if (code === 'E_USER_CANCELLED' || /cancel/i.test(msg)) return;
+      Alert.alert(
+        'Purchase Failed',
+        'Your purchase could not be completed. You have not been charged — please try again, or contact support if the problem continues.',
+      );
+    } finally {
+      setPurchaseLoading(false);
+    }
+  };
+
+  // Apple requires a Restore Purchases option for non-consumable IAP.
+  const handleRestorePurchases = async () => {
+    if (!user?.id) { promptSignIn(); return; }
+    setRestoreLoading(true);
+    try {
+      await iapService.init();
+      const count = await iapService.restore();
+      if (count > 0) {
+        const status = await paymentService.getPurchaseStatus(id);
+        setIsPurchased(status.purchased ?? false);
+        Alert.alert('Purchases Restored', 'Your previous purchases have been restored to this account.');
+      } else {
+        Alert.alert('Nothing to Restore', 'No previous purchases were found for this Apple ID.');
+      }
+    } catch {
+      Alert.alert('Restore Failed', 'We could not restore purchases right now. Please try again later.');
+    } finally {
+      setRestoreLoading(false);
+    }
+  };
+
   const handleBuy = async () => {
     if (!book) return;
+    if (IS_IOS) { await handleBuyIOS(); return; }
+    if (!user?.id) { promptSignIn(); return; }
     setPurchaseLoading(true);
     try {
       const pType = book.book_content_type === 'audiobook' ? 'audiobook' : 'ebook';
@@ -434,11 +519,14 @@ export default function BookDetailScreen() {
       if (isPurchased || book.access_type === AccessType.FREE) {
         router.push(`/player/${book.id}?chapterIndex=${index}`);
       } else {
-        Alert.alert(
-          'Purchase Required',
-          `Buy this audiobook for ₹${book.price_inr ?? 0} to listen.`,
-          [{ text: 'Cancel', style: 'cancel' }, { text: `Buy ₹${book.price_inr ?? 0}`, onPress: handleBuy }]
-        );
+        {
+          const priceLabel = (IS_IOS && iapPrice) ? iapPrice : `₹${book.price_inr ?? 0}`;
+          Alert.alert(
+            'Purchase Required',
+            `Buy this audiobook for ${priceLabel} to listen.`,
+            [{ text: 'Cancel', style: 'cancel' }, { text: `Buy ${priceLabel}`, onPress: handleBuy }]
+          );
+        }
       }
       return;
     }
@@ -451,12 +539,13 @@ export default function BookDetailScreen() {
 
     // Paid book not yet purchased — prompt buy
     if (book.access_type === AccessType.PAID) {
+      const priceLabel = (IS_IOS && iapPrice) ? iapPrice : `₹${book.price_inr ?? 0}`;
       Alert.alert(
         'Purchase Required',
-        `Buy this book for ₹${book.price_inr ?? 0} to read all chapters.`,
+        `Buy this book for ${priceLabel} to read all chapters.`,
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: `Buy ₹${book.price_inr ?? 0}`, onPress: handleBuy },
+          { text: `Buy ${priceLabel}`, onPress: handleBuy },
         ]
       );
       return;
@@ -471,6 +560,11 @@ export default function BookDetailScreen() {
   };
 
   const showUnlockPrompt = (chapter: Chapter) => {
+    // Coin unlocks bypass Apple IAP — not offered on iOS (guideline 3.1.1)
+    if (IS_IOS) {
+      Alert.alert('Chapter Locked', 'This chapter is not available yet.');
+      return;
+    }
     Alert.alert(
       'Chapter Locked',
       `This chapter costs ${chapter.coin_cost} coins to unlock. You have ${user?.coin_balance || 0} coins.`,
@@ -724,7 +818,7 @@ export default function BookDetailScreen() {
                     : book.access_type === AccessType.PAID
                     ? isPurchased
                       ? 'PURCHASED'
-                      : `₹${book.price_inr ?? 0}`
+                      : (IS_IOS && iapPrice) ? iapPrice : `₹${book.price_inr ?? 0}`
                     : book.access_type === AccessType.COINS
                     ? `${book.coin_price} COINS`
                     : book.access_type === AccessType.PREMIUM
@@ -745,8 +839,9 @@ export default function BookDetailScreen() {
             />
           ) : (
             <>
-              {/* Coupon input */}
-              {!appliedCoupon ? (
+              {/* Coupon input — Android/web only; coupons unlocking paid content
+                  are not allowed on iOS (guideline 3.1.1) */}
+              {IS_IOS ? null : !appliedCoupon ? (
                 <View style={styles.couponRow}>
                   <TextInput
                     style={styles.couponInput}
@@ -783,7 +878,7 @@ export default function BookDetailScreen() {
               )}
 
               {/* Price summary */}
-              {appliedCoupon && (
+              {!IS_IOS && appliedCoupon && (
                 <View style={styles.priceSummary}>
                   <Text style={styles.priceOriginal}>₹{book.price_inr ?? 0}</Text>
                   <Text style={styles.priceFinal}>₹{appliedCoupon.finalAmount}</Text>
@@ -802,7 +897,9 @@ export default function BookDetailScreen() {
                     <ActivityIndicator color="#fff" />
                   ) : (
                     <Text style={styles.buyButtonText}>
-                      Buy ₹{appliedCoupon ? appliedCoupon.finalAmount : (book.price_inr ?? 0)}
+                      {IS_IOS
+                        ? `Buy ${iapPrice ?? `₹${book.price_inr ?? 0}`}`
+                        : `Buy ₹${appliedCoupon ? appliedCoupon.finalAmount : (book.price_inr ?? 0)}`}
                     </Text>
                   )}
                 </TouchableOpacity>
@@ -810,6 +907,17 @@ export default function BookDetailScreen() {
                   <Ionicons name={inWishlist ? 'heart' : 'heart-outline'} size={32} color={colors.primary} />
                 </TouchableOpacity>
               </View>
+
+              {/* Apple requires a Restore Purchases option for non-consumables */}
+              {IS_IOS && (
+                <TouchableOpacity onPress={handleRestorePurchases} disabled={restoreLoading} style={{ alignItems: 'center', paddingVertical: spacing.sm }}>
+                  {restoreLoading ? (
+                    <ActivityIndicator color={colors.primary} size="small" />
+                  ) : (
+                    <Text style={{ ...typography.bodySmall, color: colors.primary }}>Restore Purchases</Text>
+                  )}
+                </TouchableOpacity>
+              )}
             </>
           )}
           {isFreeOrPurchased && (

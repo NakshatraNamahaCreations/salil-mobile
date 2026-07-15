@@ -8,6 +8,7 @@ import {
   Alert,
   Animated,
   Dimensions,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -60,6 +61,16 @@ const ACCENT_DARK = '#22C55E';
 export default function SubscriptionScreen() {
   const { user } = useAppSelector((state) => state.auth);
   const { colors, theme } = useTheme();
+
+  // Subscriptions are not sold through Apple IAP yet — never shown on iOS
+  // (App Store guideline 3.1.1). This guard covers deep links.
+  if (Platform.OS === 'ios') {
+    return (
+      <SafeAreaView style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>
+        <Text style={{ color: colors.text }}>This feature is not available on iOS.</Text>
+      </SafeAreaView>
+    );
+  }
   const [selectedPlan, setSelectedPlan] = useState(1);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;

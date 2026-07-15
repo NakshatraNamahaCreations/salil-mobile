@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { View, Image, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Image, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Content } from '../../types';
 import { spacing } from '../../theme/spacing';
@@ -17,15 +17,18 @@ interface ContentCardProps {
 export const ContentCard: React.FC<ContentCardProps> = ({ content, onPress }) => {
   const { colors } = useTheme();
 
-  // Only show badge for paid content — free is assumed
+  // Only show badge for paid content — free is assumed.
+  // On iOS the actual price comes from Apple IAP (guideline 3.1.1), so cards
+  // show a neutral PAID badge instead of the INR price.
+  const paidLabel = Platform.OS === 'ios' ? 'PAID' : `₹${content.price_inr ?? 0}`;
   const getAccessBadge = () => {
     switch (content.access_type) {
       case 'paid':
-        return { text: `₹${content.price_inr ?? 0}`, gradient: ['#F59E0B', '#D97706'] as [string, string] };
+        return { text: paidLabel, gradient: ['#F59E0B', '#D97706'] as [string, string] };
       case 'premium':
         return { text: 'PREMIUM', gradient: ['#FFE66D', '#F7C948'] as [string, string] };
       case 'coins':
-        return { text: `₹${content.price_inr ?? 0}`, gradient: ['#F59E0B', '#D97706'] as [string, string] };
+        return { text: paidLabel, gradient: ['#F59E0B', '#D97706'] as [string, string] };
       default:
         return null;
     }

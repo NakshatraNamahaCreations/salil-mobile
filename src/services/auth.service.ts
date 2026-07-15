@@ -13,7 +13,8 @@ export const authService = {
   },
 
   async register(name: string, phone: string, email: string, password: string, referralCode?: string): Promise<AuthResponse> {
-    const response = await api.post('/auth/register', { name, phone, email, password, ...(referralCode ? { referralCode: referralCode.toUpperCase() } : {}) });
+    // Phone is optional (App Store guideline 5.1.1) — omit when not provided
+    const response = await api.post('/auth/register', { name, email, password, ...(phone ? { phone } : {}), ...(referralCode ? { referralCode: referralCode.toUpperCase() } : {}) });
     const data = response.data as AuthResponse;
     await storage.setItem('auth_token', data.access_token);
     await storage.setItem('user_id', data.user.id);
@@ -64,6 +65,13 @@ export const authService = {
 
   async changePassword(currentPassword: string, newPassword: string): Promise<void> {
     await api.post('/auth/change-password', { currentPassword, newPassword });
+  },
+
+  // Permanently deletes the user's account and all associated data
+  // (App Store guideline 5.1.1(v) — account deletion is mandatory).
+  async deleteAccount(): Promise<void> {
+    await api.delete('/reader/account');
+    await this.logout();
   },
 
   async logout() {

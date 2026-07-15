@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -23,6 +24,7 @@ import {
   ChevronRight,
   Gift,
   Lock,
+  Trash2,
 } from 'lucide-react-native';
 import { typography } from '../../src/theme/typography';
 import { spacing } from '../../src/theme/spacing';
@@ -31,6 +33,7 @@ import { useAppSelector } from '../../src/hooks/useAppSelector';
 import { resetStore } from '../../src/store/store';
 import { authService } from '../../src/services/auth.service';
 import { useTheme } from '../../src/theme/ThemeContext';
+import { SignInPrompt } from '../../src/components/SignInPrompt';
 
 const LANG_LABELS: Record<string, string> = {
   en: 'English', hi: 'Hindi', mr: 'Marathi', gu: 'Gujarati',
@@ -70,6 +73,48 @@ export default function ProfileScreen() {
   const { user } = useAppSelector((state) => state.auth);
 
   const langLabel = LANG_LABELS[user?.preferences?.language || 'en'] || 'English';
+
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete Account',
+      'This permanently deletes your account, purchases, library and personal data. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete Permanently',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert('Are you absolutely sure?', 'Your account and all data will be permanently deleted.', [
+              { text: 'Keep My Account', style: 'cancel' },
+              {
+                text: 'Yes, Delete Everything',
+                style: 'destructive',
+                onPress: async () => {
+                  if (deleting) return;
+                  setDeleting(true);
+                  try {
+                    await authService.deleteAccount();
+                    dispatch(resetStore());
+                    Alert.alert('Account Deleted', 'Your account and data have been permanently deleted.');
+                    router.replace('/(tabs)/home');
+                  } catch {
+                    Alert.alert(
+                      'Something Went Wrong',
+                      'We could not delete your account right now. Please try again, or contact support from Help & Support.',
+                    );
+                  } finally {
+                    setDeleting(false);
+                  }
+                },
+              },
+            ]);
+          },
+        },
+      ],
+    );
+  };
 
   const handleLogout = () => {
     Alert.alert('Logout', 'Are you sure you want to logout?', [
@@ -155,6 +200,15 @@ export default function ProfileScreen() {
     menuItemSubtitle: { ...typography.caption, color: colors.textSecondary, marginTop: 2 },
   }), [colors]);
 
+  if (!user?.id) {
+    return (
+      <SignInPrompt
+        title="Your Profile"
+        subtitle="Sign in to manage your account, preferences and settings."
+      />
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView contentContainerStyle={{ paddingBottom: 100 }}>
@@ -175,10 +229,14 @@ export default function ProfileScreen() {
           )}
         </View>
 
-        <View style={styles.section}>
-          <MenuItem icon={Wallet} title="Wallet" subtitle={`${user?.coin_balance || 0} coins available`} onPress={() => router.push('/wallet')} colors={colors} styles={styles} />
-          <MenuItem icon={Gift} title="Refer & Earn" subtitle="Invite friends and get rewarded" onPress={() => router.push('/profile/referral')} colors={colors} styles={styles} />
-        </View>
+        {/* Wallet coins & referral rewards unlock digital content outside Apple IAP,
+            so these entry points are Android/web only (App Store guideline 3.1.1). */}
+        {Platform.OS !== 'ios' && (
+          <View style={styles.section}>
+            <MenuItem icon={Wallet} title="Wallet" subtitle={`${user?.coin_balance || 0} coins available`} onPress={() => router.push('/wallet')} colors={colors} styles={styles} />
+            <MenuItem icon={Gift} title="Refer & Earn" subtitle="Invite friends and get rewarded" onPress={() => router.push('/profile/referral')} colors={colors} styles={styles} />
+          </View>
+        )}
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>SETTINGS</Text>
@@ -199,6 +257,15 @@ export default function ProfileScreen() {
 
         <View style={styles.section}>
           <MenuItem icon={LogOut} title="Logout" onPress={handleLogout} showChevron={false} colors={colors} styles={styles} />
+          <MenuItem
+            icon={Trash2}
+            title={deleting ? 'Deleting Account…' : 'Delete Account'}
+            subtitle="Permanently delete your account and data"
+            onPress={handleDeleteAccount}
+            showChevron={false}
+            colors={colors}
+            styles={styles}
+          />
         </View>
       </ScrollView>
     </SafeAreaView>

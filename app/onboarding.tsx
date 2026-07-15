@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { storage } from '../src/utils/storage';
 
 const { width } = Dimensions.get('window');
 
@@ -42,7 +43,8 @@ export default function OnboardingScreen() {
       scrollViewRef.current?.scrollTo({ x: nextIndex * width, animated: true });
       setCurrentIndex(nextIndex);
     } else {
-      router.replace('/login');
+      storage.setItem('onboarding_seen', '1').catch(() => {});
+      router.replace('/(tabs)/home');
     }
   };
 

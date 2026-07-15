@@ -262,11 +262,14 @@ export default function HomeScreen() {
             <Ionicons name="language" size={14} color={colors.text} />
             <Text style={styles.langChipText} numberOfLines={1}>{currentLangLabel}</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => router.push("/wallet")}>
-            <View style={styles.coinBadge}>
-              <Text style={styles.coinText}>🪙 {user?.coin_balance || 0}</Text>
-            </View>
-          </TouchableOpacity>
+          {/* Coin wallet unlocks digital content outside Apple IAP — Android/web only (guideline 3.1.1) */}
+          {Platform.OS !== "ios" && !!user?.id && (
+            <TouchableOpacity onPress={() => router.push("/wallet")}>
+              <View style={styles.coinBadge}>
+                <Text style={styles.coinText}>🪙 {user?.coin_balance || 0}</Text>
+              </View>
+            </TouchableOpacity>
+          )}
         </View>
 
         {banners.length > 0 && (

@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { authService } from '../src/services/auth.service';
+import { storage } from '../src/utils/storage';
 import { useAppDispatch } from '../src/hooks/useAppDispatch';
 import { setUser } from '../src/store/slices/authSlice';
 import { resetStore } from '../src/store/store';
@@ -20,7 +21,9 @@ export default function SplashScreen() {
       if (!valid) {
         await authService.logout();
         dispatch(resetStore());
-        setTimeout(() => router.replace('/onboarding'), 2000);
+        // Guests can browse freely — only show onboarding on first launch.
+        const seen = await storage.getItem('onboarding_seen');
+        setTimeout(() => router.replace(seen ? '/(tabs)/home' : '/onboarding'), 2000);
         return;
       }
 
@@ -30,10 +33,10 @@ export default function SplashScreen() {
         dispatch(setUser(user));
         setTimeout(() => router.replace('/(tabs)/home'), 2000);
       } catch {
-        // Token rejected by server — clear session
+        // Token rejected by server — clear session, continue as guest
         await authService.logout();
         dispatch(resetStore());
-        setTimeout(() => router.replace('/login'), 2000);
+        setTimeout(() => router.replace('/(tabs)/home'), 2000);
       }
     } catch {
       setTimeout(() => router.replace('/onboarding'), 2000);

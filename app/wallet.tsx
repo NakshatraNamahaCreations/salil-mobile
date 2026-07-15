@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StatusBar,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -56,6 +57,17 @@ function getTxnIcon(
 
 export default function WalletScreen() {
   const { user } = useAppSelector((state) => state.auth);
+
+  // Coin wallet unlocks digital content outside Apple IAP — never shown on iOS
+  // (App Store guideline 3.1.1). All entry points are hidden there; this guard
+  // covers deep links.
+  if (Platform.OS === 'ios') {
+    return (
+      <SafeAreaView style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <Text>This feature is not available on iOS.</Text>
+      </SafeAreaView>
+    );
+  }
 
   const [transactions, setTransactions] = useState<WalletTxn[]>([]);
   const [txPage, setTxPage] = useState(1);

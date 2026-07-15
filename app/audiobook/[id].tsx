@@ -40,6 +40,10 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { ReviewSection } from '../../src/components/ReviewSection';
 import { useAudioPlayer } from '../../src/context/AudioPlayerContext';
 import { getContentSectionLabels } from '../../src/utils/contentLabels';
+import { iapService, appleProductIdFor } from '../../src/services/iap.service';
+
+// iOS digital-content purchases must use Apple In-App Purchase (guideline 3.1.1).
+const IS_IOS = Platform.OS === 'ios';
 
 let WebView: any = null;
 if (Platform.OS !== 'web') {
@@ -83,7 +87,25 @@ export default function AudiobookDetailScreen() {
   const [couponLoading, setCouponLoading] = useState(false);
   const [appliedCoupon, setAppliedCoupon] = useState<{ code: string; discountAmount: number; finalAmount: number; description: string } | null>(null);
 
+  // Apple IAP — localized App Store price for the Buy button (iOS only)
+  const [iapPrice, setIapPrice] = useState<string | null>(null);
+  const [restoreLoading, setRestoreLoading] = useState(false);
+
   const inWishlist = wishlist.some((item) => item.id === id);
+
+  const iapProductId = () => appleProductIdFor(id, 'audiobook', (audiobook as any)?.apple_product_id);
+
+  useEffect(() => {
+    if (!IS_IOS || !audiobook || isPurchased || audiobook.access_type !== AccessType.PAID) return;
+    let cancelled = false;
+    (async () => {
+      const ok = await iapService.init();
+      if (!ok || cancelled) return;
+      const product = await iapService.getProduct(iapProductId());
+      if (!cancelled && product?.displayPrice) setIapPrice(product.displayPrice);
+    })();
+    return () => { cancelled = true; };
+  }, [audiobook?.id, isPurchased]);
 
   // Re-run when `user` becomes available: on a cold start the first pass can run
   // before auth is hydrated from storage, which would skip the purchase check
@@ -187,8 +209,63 @@ export default function AudiobookDetailScreen() {
     }
   };
 
+  const promptSignIn = () => {
+    Alert.alert(
+      'Sign In Required',
+      'Purchases are linked to your account so you can access them on all your devices. Please sign in or create a free account first.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign In', onPress: () => router.push('/login') },
+      ],
+    );
+  };
+
+  // ── iOS: Apple In-App Purchase flow (guideline 3.1.1) ─────────
+  const handleBuyIOS = async () => {
+    if (!audiobook) return;
+    if (!user?.id) { promptSignIn(); return; }
+    setPurchaseLoading(true);
+    try {
+      await iapService.purchase(id, 'audiobook', iapProductId());
+      setIsPurchased(true);
+      Alert.alert('Purchase Complete', `"${audiobook.title}" has been added to your library. Enjoy!`);
+    } catch (err: any) {
+      const code = err?.code ?? '';
+      const msg = String(err?.message ?? '');
+      if (code === 'E_USER_CANCELLED' || /cancel/i.test(msg)) return;
+      Alert.alert(
+        'Purchase Failed',
+        'Your purchase could not be completed. You have not been charged — please try again, or contact support if the problem continues.',
+      );
+    } finally {
+      setPurchaseLoading(false);
+    }
+  };
+
+  const handleRestorePurchases = async () => {
+    if (!user?.id) { promptSignIn(); return; }
+    setRestoreLoading(true);
+    try {
+      await iapService.init();
+      const count = await iapService.restore();
+      if (count > 0) {
+        const status = await paymentService.getPurchaseStatus(id, 'audiobook');
+        setIsPurchased(status.purchased ?? false);
+        Alert.alert('Purchases Restored', 'Your previous purchases have been restored to this account.');
+      } else {
+        Alert.alert('Nothing to Restore', 'No previous purchases were found for this Apple ID.');
+      }
+    } catch {
+      Alert.alert('Restore Failed', 'We could not restore purchases right now. Please try again later.');
+    } finally {
+      setRestoreLoading(false);
+    }
+  };
+
   const handleBuy = async () => {
     if (!audiobook) return;
+    if (IS_IOS) { await handleBuyIOS(); return; }
+    if (!user?.id) { promptSignIn(); return; }
     setPurchaseLoading(true);
     try {
       const order = await paymentService.createBookOrder(id, 'audiobook', appliedCoupon?.code);
@@ -512,7 +589,7 @@ export default function AudiobookDetailScreen() {
                   ? 'FREE'
                   : isPurchased
                   ? 'PURCHASED'
-                  : `₹${audiobook.price_inr ?? 0}`}
+                  : (IS_IOS && iapPrice) ? iapPrice : `₹${audiobook.price_inr ?? 0}`}
               </Text>
             </View>
           </View>
@@ -528,8 +605,9 @@ export default function AudiobookDetailScreen() {
             </>
           ) : (
             <>
-              {/* Coupon input */}
-              {!appliedCoupon ? (
+              {/* Coupon input — Android/web only; coupons unlocking paid content
+                  are not allowed on iOS (guideline 3.1.1) */}
+              {IS_IOS ? null : !appliedCoupon ? (
                 <View style={styles.couponRow}>
                   <TextInput
                     style={styles.couponInput}
@@ -566,7 +644,7 @@ export default function AudiobookDetailScreen() {
               )}
 
               {/* Price summary */}
-              {appliedCoupon && (
+              {!IS_IOS && appliedCoupon && (
                 <View style={styles.priceSummary}>
                   <Text style={styles.priceOriginal}>₹{audiobook.price_inr ?? 0}</Text>
                   <Text style={styles.priceFinal}>₹{appliedCoupon.finalAmount}</Text>
@@ -585,7 +663,9 @@ export default function AudiobookDetailScreen() {
                     <ActivityIndicator color="#fff" />
                   ) : (
                     <Text style={styles.buyButtonText}>
-                      Buy ₹{appliedCoupon ? appliedCoupon.finalAmount : (audiobook.price_inr ?? 0)}
+                      {IS_IOS
+                        ? `Buy ${iapPrice ?? `₹${audiobook.price_inr ?? 0}`}`
+                        : `Buy ₹${appliedCoupon ? appliedCoupon.finalAmount : (audiobook.price_inr ?? 0)}`}
                     </Text>
                   )}
                 </TouchableOpacity>
@@ -593,6 +673,17 @@ export default function AudiobookDetailScreen() {
                   <Ionicons name={inWishlist ? 'heart' : 'heart-outline'} size={32} color={colors.primary} />
                 </TouchableOpacity>
               </View>
+
+              {/* Apple requires a Restore Purchases option for non-consumables */}
+              {IS_IOS && (
+                <TouchableOpacity onPress={handleRestorePurchases} disabled={restoreLoading} style={{ alignItems: 'center', paddingVertical: spacing.sm, width: '100%' }}>
+                  {restoreLoading ? (
+                    <ActivityIndicator color={colors.primary} size="small" />
+                  ) : (
+                    <Text style={{ ...typography.bodySmall, color: colors.primary }}>Restore Purchases</Text>
+                  )}
+                </TouchableOpacity>
+              )}
             </>
           )}
         </View>
@@ -628,9 +719,10 @@ export default function AudiobookDetailScreen() {
                   style={[styles.chapterItem, isActive && styles.chapterItemActive]}
                   onPress={() => {
                     if (isPaid) {
-                      Alert.alert('Purchase Required', `Buy this audiobook for ₹${audiobook.price_inr ?? 0} to listen.`, [
+                      const priceLabel = (IS_IOS && iapPrice) ? iapPrice : `₹${audiobook.price_inr ?? 0}`;
+                      Alert.alert('Purchase Required', `Buy this audiobook for ${priceLabel} to listen.`, [
                         { text: 'Cancel', style: 'cancel' },
-                        { text: `Buy ₹${audiobook.price_inr ?? 0}`, onPress: handleBuy },
+                        { text: `Buy ${priceLabel}`, onPress: handleBuy },
                       ]);
                     } else {
                       handlePlay(index);
