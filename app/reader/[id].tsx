@@ -17,7 +17,7 @@ import RenderHtml from 'react-native-render-html';
 import * as ScreenCapture from 'expo-screen-capture';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Asset } from 'expo-asset';
-import { cacheDirectory, getInfoAsync, readAsStringAsync, writeAsStringAsync } from 'expo-file-system/legacy';
+import { readAsStringAsync } from 'expo-file-system/legacy';
 import { colors } from '../../src/theme/colors';
 import { typography } from '../../src/theme/typography';
 import { spacing } from '../../src/theme/spacing';
@@ -44,26 +44,26 @@ const PDFJS_WORKER_ASSET = require('../../assets/pdfjs/pdf.worker.min.txt');
 const PDFJS_CDN_MAIN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
 const PDFJS_CDN_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-// Copy the bundled pdf.js assets into the cache with a .js name (once per
-// install) and return their file:// URIs. Returns null on web or on any
+// Read the bundled pdf.js assets as source text. Returns null on web or on any
 // failure, so callers fall back to the CDN.
-async function prepareBundledPdfJs(): Promise<{ main: string; worker: string } | null> {
+//
+// We return the CODE (not file:// URIs) because on iOS the reader HTML is loaded
+// via WKWebView's loadHTMLString:baseURL:, which does NOT grant read access to
+// files in the app cache — so a `<script src="file://…">` reference silently
+// fails and the viewer hangs on "Loading PDF…". Inlining the code (and loading
+// the worker from an in-page blob URL) works on both iOS and Android.
+async function prepareBundledPdfJs(): Promise<{ mainCode: string; workerCode: string } | null> {
   if (Platform.OS === 'web') return null;
   try {
-    const copyToCache = async (assetModule: number, name: string): Promise<string | null> => {
-      const target = `${cacheDirectory}${name}`;
-      const info = await getInfoAsync(target);
-      if (info.exists && (info.size ?? 0) > 1000) return target;
+    const readAsset = async (assetModule: number): Promise<string | null> => {
       const asset = Asset.fromModule(assetModule);
       await asset.downloadAsync();
       if (!asset.localUri) return null;
-      const code = await readAsStringAsync(asset.localUri);
-      await writeAsStringAsync(target, code);
-      return target;
+      return await readAsStringAsync(asset.localUri);
     };
-    const main = await copyToCache(PDFJS_MAIN_ASSET, 'pdfjs_main_3.11.174.js');
-    const worker = await copyToCache(PDFJS_WORKER_ASSET, 'pdfjs_worker_3.11.174.js');
-    return main && worker ? { main, worker } : null;
+    const mainCode = await readAsset(PDFJS_MAIN_ASSET);
+    const workerCode = await readAsset(PDFJS_WORKER_ASSET);
+    return mainCode && workerCode ? { mainCode, workerCode } : null;
   } catch (e) {
     console.warn('[reader] could not prepare bundled pdf.js, falling back to CDN', e);
     return null;
@@ -84,7 +84,7 @@ export default function ReaderScreen() {
   const [pdfCacheUri, setPdfCacheUri] = useState('');   // Android local file URI
   // file:// URIs of the locally-bundled pdf.js engine; null until prepared (or
   // if preparation fails, in which case we fall back to the CDN).
-  const [pdfEngine, setPdfEngine] = useState<{ main: string; worker: string } | null>(null);
+  const [pdfEngine, setPdfEngine] = useState<{ mainCode: string; workerCode: string } | null>(null);
 
   // PDF page-wise state
   const [pdfCurrentPage, setPdfCurrentPage] = useState(1);
@@ -280,14 +280,21 @@ export default function ReaderScreen() {
   };
 
   const buildPdfHtml = (fileUri: string, bgColor: string, primaryColor: string) => {
-    const mainSrc = pdfEngine ? pdfEngine.main : PDFJS_CDN_MAIN;
-    const workerSrc = pdfEngine ? pdfEngine.worker : PDFJS_CDN_WORKER;
+    // Engine <script>: inline the bundled code when available (works under
+    // iOS loadHTMLString, unlike a file:// src), else load pdf.js from the CDN.
+    const engineTag = pdfEngine
+      ? `<script>${pdfEngine.mainCode}</script>`
+      : `<script src="${PDFJS_CDN_MAIN}"></script>`;
+    // Worker: from an in-page blob URL when bundled, else the CDN URL.
+    const workerSetup = pdfEngine
+      ? `pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([${JSON.stringify(pdfEngine.workerCode)}], { type: 'application/javascript' }));`
+      : `pdfjsLib.GlobalWorkerOptions.workerSrc = '${PDFJS_CDN_WORKER}';`;
     return `
     <!DOCTYPE html>
     <html>
     <head>
       <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=5.0, user-scalable=yes">
-      <script src="${mainSrc}"></script>
+      ${engineTag}
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -356,7 +363,13 @@ export default function ReaderScreen() {
       </div>
 
       <script>
-        pdfjsLib.GlobalWorkerOptions.workerSrc = '${workerSrc}';
+        // If the engine script failed to load, show an error instead of
+        // hanging on the spinner forever.
+        if (typeof pdfjsLib === 'undefined') {
+          document.getElementById('loading').innerHTML =
+            '<span style="color:#FF6B6B">Could not load the PDF viewer. Please try again.</span>';
+        } else {
+        ${workerSetup}
 
         let pdfDoc = null;
         let currentPage = 1;
@@ -486,6 +499,7 @@ export default function ReaderScreen() {
             document.getElementById('loading').innerHTML = '<span style="color:#FF6B6B">Failed to load PDF. Check connection.</span>';
           }
         })();
+        } // end pdfjsLib guard
       </script>
     </body>
     </html>
