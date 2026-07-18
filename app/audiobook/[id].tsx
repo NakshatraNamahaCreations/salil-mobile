@@ -34,6 +34,8 @@ import { Content, AccessType } from '../../src/types';
 import { useAppSelector } from '../../src/hooks/useAppSelector';
 import { useAppDispatch } from '../../src/hooks/useAppDispatch';
 import { addToWishlist, removeFromWishlist } from '../../src/store/slices/contentSlice';
+import { updateCoinBalance } from '../../src/store/slices/authSlice';
+import { walletService } from '../../src/services/wallet.service';
 import { LoadingScreen } from '../../src/components/layout/LoadingScreen';
 import { Button } from '../../src/components/buttons/Button';
 import { useTheme } from '../../src/theme/ThemeContext';
@@ -221,22 +223,44 @@ export default function AudiobookDetailScreen() {
   };
 
   // ── iOS: Apple In-App Purchase flow (guideline 3.1.1) ─────────
-  const handleBuyIOS = async () => {
+  // iOS: unlock the audiobook by spending coins (coins bought via Apple IAP).
+  const handleUnlockWithCoins = async () => {
     if (!audiobook) return;
     if (!user?.id) { promptSignIn(); return; }
+    const cost = Number((audiobook as any).coin_price ?? audiobook.price_inr ?? 0);
+    const balance = Number(user.coin_balance ?? 0);
+    if (balance < cost) {
+      Alert.alert(
+        'Not enough coins',
+        `Unlocking "${audiobook.title}" costs ${cost} coins. You have ${balance}. Would you like to buy coins?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Buy Coins', onPress: () => router.push('/wallet') },
+        ],
+      );
+      return;
+    }
     setPurchaseLoading(true);
     try {
-      await iapService.purchase(id, 'audiobook', iapProductId());
+      const result = await walletService.unlockBook(id, 'audiobook');
       setIsPurchased(true);
-      Alert.alert('Purchase Complete', `"${audiobook.title}" has been added to your library. Enjoy!`);
+      const newBalance = result?.wallet?.availableCoins;
+      if (typeof newBalance === 'number') dispatch(updateCoinBalance(newBalance));
+      Alert.alert('Unlocked', `"${audiobook.title}" has been added to your library. Enjoy!`);
     } catch (err: any) {
-      const code = err?.code ?? '';
-      const msg = String(err?.message ?? '');
-      if (code === 'E_USER_CANCELLED' || /cancel/i.test(msg)) return;
-      Alert.alert(
-        'Purchase Failed',
-        'Your purchase could not be completed. You have not been charged — please try again, or contact support if the problem continues.',
-      );
+      const msg = err?.response?.data?.message || err?.message || '';
+      if (/insufficient/i.test(String(msg))) {
+        Alert.alert(
+          'Not enough coins',
+          'You need more coins to unlock this. Would you like to buy coins?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Buy Coins', onPress: () => router.push('/wallet') },
+          ],
+        );
+      } else {
+        Alert.alert('Unlock Failed', 'This unlock could not be completed. Please try again.');
+      }
     } finally {
       setPurchaseLoading(false);
     }
@@ -264,7 +288,7 @@ export default function AudiobookDetailScreen() {
 
   const handleBuy = async () => {
     if (!audiobook) return;
-    if (IS_IOS) { await handleBuyIOS(); return; }
+    if (IS_IOS) { await handleUnlockWithCoins(); return; }
     if (!user?.id) { promptSignIn(); return; }
     setPurchaseLoading(true);
     try {
@@ -589,7 +613,7 @@ export default function AudiobookDetailScreen() {
                   ? 'FREE'
                   : isPurchased
                   ? 'PURCHASED'
-                  : (IS_IOS && iapPrice) ? iapPrice : `₹${audiobook.price_inr ?? 0}`}
+                  : IS_IOS ? `${(audiobook as any).coin_price ?? audiobook.price_inr ?? 0} COINS` : `₹${audiobook.price_inr ?? 0}`}
               </Text>
             </View>
           </View>
@@ -664,7 +688,7 @@ export default function AudiobookDetailScreen() {
                   ) : (
                     <Text style={styles.buyButtonText}>
                       {IS_IOS
-                        ? `Buy ${iapPrice ?? `₹${audiobook.price_inr ?? 0}`}`
+                        ? `Unlock • ${(audiobook as any).coin_price ?? audiobook.price_inr ?? 0} coins`
                         : `Buy ₹${appliedCoupon ? appliedCoupon.finalAmount : (audiobook.price_inr ?? 0)}`}
                     </Text>
                   )}
@@ -719,10 +743,12 @@ export default function AudiobookDetailScreen() {
                   style={[styles.chapterItem, isActive && styles.chapterItemActive]}
                   onPress={() => {
                     if (isPaid) {
-                      const priceLabel = (IS_IOS && iapPrice) ? iapPrice : `₹${audiobook.price_inr ?? 0}`;
-                      Alert.alert('Purchase Required', `Buy this audiobook for ${priceLabel} to listen.`, [
+                      const priceLabel = IS_IOS
+                        ? `${(audiobook as any).coin_price ?? audiobook.price_inr ?? 0} coins`
+                        : `₹${audiobook.price_inr ?? 0}`;
+                      Alert.alert('Purchase Required', `${IS_IOS ? 'Unlock' : 'Buy'} this audiobook for ${priceLabel} to listen.`, [
                         { text: 'Cancel', style: 'cancel' },
-                        { text: `Buy ${priceLabel}`, onPress: handleBuy },
+                        { text: IS_IOS ? `Unlock (${priceLabel})` : `Buy ${priceLabel}`, onPress: handleBuy },
                       ]);
                     } else {
                       handlePlay(index);

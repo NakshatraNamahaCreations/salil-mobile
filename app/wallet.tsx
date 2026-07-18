@@ -8,12 +8,28 @@ import {
   ActivityIndicator,
   StatusBar,
   Platform,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { walletService } from '../src/services/wallet.service';
+import { iapService } from '../src/services/iap.service';
 import { useAppSelector } from '../src/hooks/useAppSelector';
+import { useAppDispatch } from '../src/hooks/useAppDispatch';
+import { updateCoinBalance } from '../src/store/slices/authSlice';
+
+interface CoinPack {
+  id: string;
+  name: string;
+  coins: number;
+  bonus_coins: number;
+  total_coins: number;
+  price_inr: number;
+  is_offer: boolean;
+  offer_label: string | null;
+  apple_product_id: string;
+}
 
 // Matches actual backend WalletTransaction fields
 interface WalletTxn {
@@ -57,17 +73,7 @@ function getTxnIcon(
 
 export default function WalletScreen() {
   const { user } = useAppSelector((state) => state.auth);
-
-  // Coin wallet unlocks digital content outside Apple IAP — never shown on iOS
-  // (App Store guideline 3.1.1). All entry points are hidden there; this guard
-  // covers deep links.
-  if (Platform.OS === 'ios') {
-    return (
-      <SafeAreaView style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <Text>This feature is not available on iOS.</Text>
-      </SafeAreaView>
-    );
-  }
+  const dispatch = useAppDispatch();
 
   const [transactions, setTransactions] = useState<WalletTxn[]>([]);
   const [txPage, setTxPage] = useState(1);
@@ -75,11 +81,65 @@ export default function WalletScreen() {
   const [loadingTransactions, setLoadingTransactions] = useState(false);
   const [loadingMoreTransactions, setLoadingMoreTransactions] = useState(false);
 
+  // Coin store (buy coins via Apple IAP on iOS)
+  const [packs, setPacks] = useState<CoinPack[]>([]);
+  const [buyingPackId, setBuyingPackId] = useState<string | null>(null);
+  const canBuyCoins = iapService.isAvailable(); // iOS + StoreKit present
+
   useEffect(() => {
     if (user?.id) {
       loadTransactions();
+      loadBalance();
     }
+    loadPacks();
+    if (canBuyCoins) iapService.init();
+    return () => {
+      if (canBuyCoins) iapService.end();
+    };
   }, [user?.id]);
+
+  const loadBalance = async () => {
+    if (!user?.id) return;
+    try {
+      const { coin_balance } = await walletService.getBalance(user.id);
+      dispatch(updateCoinBalance(coin_balance));
+    } catch {
+      /* keep cached balance */
+    }
+  };
+
+  const loadPacks = async () => {
+    try {
+      const data = await walletService.getCoinPacks();
+      setPacks(Array.isArray(data) ? data : []);
+    } catch {
+      setPacks([]);
+    }
+  };
+
+  const handleBuyPack = async (pack: CoinPack) => {
+    if (!canBuyCoins) {
+      Alert.alert('Not available', 'Buying coins is available in the iOS app.');
+      return;
+    }
+    if (buyingPackId) return;
+    setBuyingPackId(pack.id);
+    try {
+      const productId = pack.apple_product_id || `coins_${pack.coins}`;
+      const added = await iapService.purchaseCoins(pack.id, productId);
+      await loadBalance();
+      await loadTransactions();
+      Alert.alert('Coins Added', `${added || pack.total_coins} coins have been added to your wallet.`);
+    } catch (e: any) {
+      const msg = e?.response?.data?.message || e?.message || '';
+      // A user cancelling the payment sheet is not an error worth alerting.
+      if (!/cancel/i.test(String(msg))) {
+        Alert.alert('Purchase Failed', 'Your purchase could not be completed. You have not been charged — please try again.');
+      }
+    } finally {
+      setBuyingPackId(null);
+    }
+  };
 
   const referralTransactions = useMemo(() => {
     return transactions.filter(
@@ -157,7 +217,7 @@ export default function WalletScreen() {
             </View>
 
             <View style={styles.balanceAmountRow}>
-              <Text style={styles.balanceCurrency}>₹</Text>
+              <Ionicons name="server" size={26} color="#FFD36A" style={{ marginRight: 8, marginBottom: 10 }} />
               <Text style={styles.balanceAmount}>
                 {Number(user?.coin_balance || 0).toLocaleString()}
               </Text>
@@ -182,6 +242,48 @@ export default function WalletScreen() {
               </View>
             </View>
           </LinearGradient>
+
+          {/* Buy Coins — coins are purchased via Apple IAP (iOS) */}
+          {canBuyCoins && packs.length > 0 && (
+            <View style={styles.sectionWrap}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Buy Coins</Text>
+              </View>
+              <View style={styles.packGrid}>
+                {packs.map((pack) => {
+                  const buying = buyingPackId === pack.id;
+                  return (
+                    <TouchableOpacity
+                      key={pack.id}
+                      style={styles.packCard}
+                      activeOpacity={0.85}
+                      disabled={!!buyingPackId}
+                      onPress={() => handleBuyPack(pack)}
+                    >
+                      {pack.is_offer && pack.offer_label ? (
+                        <View style={styles.packBadge}>
+                          <Text style={styles.packBadgeText}>{pack.offer_label}</Text>
+                        </View>
+                      ) : null}
+                      <Ionicons name="server-outline" size={22} color="#FFD36A" />
+                      <Text style={styles.packCoins}>{pack.total_coins.toLocaleString()}</Text>
+                      <Text style={styles.packCoinsLabel}>coins</Text>
+                      {pack.bonus_coins > 0 && (
+                        <Text style={styles.packBonus}>+{pack.bonus_coins} bonus</Text>
+                      )}
+                      <View style={styles.packBuyBtn}>
+                        {buying ? (
+                          <ActivityIndicator color="#0B0E14" size="small" />
+                        ) : (
+                          <Text style={styles.packBuyText}>₹{pack.price_inr}</Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          )}
 
           {/* Referral Coins Transactions */}
           <View style={styles.sectionWrap}>
@@ -366,6 +468,69 @@ const styles = StyleSheet.create({
   statValue: {
     color: '#FFFFFF',
     fontSize: 16,
+    fontWeight: '800',
+  },
+
+  packGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  packCard: {
+    width: '47%',
+    backgroundColor: '#0F1625',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    alignItems: 'center',
+    paddingVertical: 20,
+    paddingHorizontal: 12,
+  },
+  packBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: '#3A2E12',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  packBadgeText: {
+    color: '#FFD36A',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  packCoins: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '900',
+    marginTop: 8,
+  },
+  packCoinsLabel: {
+    color: '#9BA7BA',
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 1,
+  },
+  packBonus: {
+    color: '#4ADE80',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  packBuyBtn: {
+    marginTop: 14,
+    backgroundColor: '#FFD36A',
+    borderRadius: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 22,
+    minWidth: 90,
+    alignItems: 'center',
+  },
+  packBuyText: {
+    color: '#0B0E14',
+    fontSize: 15,
     fontWeight: '800',
   },
 

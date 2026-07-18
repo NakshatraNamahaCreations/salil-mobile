@@ -229,14 +229,14 @@ export default function ProfileScreen() {
           )}
         </View>
 
-        {/* Wallet coins & referral rewards unlock digital content outside Apple IAP,
-            so these entry points are Android/web only (App Store guideline 3.1.1). */}
-        {Platform.OS !== 'ios' && (
-          <View style={styles.section}>
-            <MenuItem icon={Wallet} title="Wallet" subtitle={`${user?.coin_balance || 0} coins available`} onPress={() => router.push('/wallet')} colors={colors} styles={styles} />
+        {/* Wallet — coins are bought via Apple IAP on iOS and unlock content.
+            Refer & Earn (free coins) stays Android/web only. */}
+        <View style={styles.section}>
+          <MenuItem icon={Wallet} title="Wallet" subtitle={`${user?.coin_balance || 0} coins available`} onPress={() => router.push('/wallet')} colors={colors} styles={styles} />
+          {Platform.OS !== 'ios' && (
             <MenuItem icon={Gift} title="Refer & Earn" subtitle="Invite friends and get rewarded" onPress={() => router.push('/profile/referral')} colors={colors} styles={styles} />
-          </View>
-        )}
+          )}
+        </View>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>SETTINGS</Text>

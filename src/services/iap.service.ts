@@ -33,6 +33,14 @@ export function appleProductIdFor(contentId: string, purchaseType: IapPurchaseTy
   return `${purchaseType === 'audiobook' ? 'audiobook' : 'book'}_${contentId}`;
 }
 
+// Coin packs are CONSUMABLE App Store products (unlike book purchases). The
+// Product ID comes from the backend (`apple_product_id`), falling back to the
+// `coins_<coins>` convention so packs can be pre-registered in ASC.
+export function appleCoinProductId(coins: number, explicitId?: string | null) {
+  if (explicitId) return explicitId;
+  return `coins_${coins}`;
+}
+
 export const iapService = {
   isAvailable(): boolean {
     return Platform.OS === 'ios' && !!ExpoIap;
@@ -104,6 +112,37 @@ export const iapService = {
       console.error('IAP finishTransaction failed', e);
     }
     return true;
+  },
+
+  // Buy a coin pack (CONSUMABLE). Runs the StoreKit payment, sends the signed
+  // transaction to the backend to verify with Apple and credit the coins, then
+  // finishes the transaction. Returns the number of coins credited.
+  async purchaseCoins(packId: string, productId: string): Promise<number> {
+    if (!this.isAvailable()) throw new Error('In-app purchases are not available in this build.');
+
+    const purchase = await ExpoIap.requestPurchase({
+      request: { apple: { sku: productId } },
+      type: 'in-app',
+    });
+    const tx = Array.isArray(purchase) ? purchase[0] : purchase;
+    if (!tx) throw new Error('Purchase was not completed.');
+
+    const jws = tx.purchaseToken ?? tx.transactionReceipt ?? null;
+    if (!jws) throw new Error('Missing purchase receipt.');
+
+    const res = await api.post('/reader/wallet/verify-apple-coin-purchase', {
+      packId,
+      productId,
+      jws,
+    });
+
+    // Consumable: finish the transaction so it can be bought again.
+    try {
+      await ExpoIap.finishTransaction({ purchase: tx, isConsumable: true });
+    } catch (e) {
+      console.error('IAP finishTransaction (coins) failed', e);
+    }
+    return res?.data?.data?.coinsAdded ?? res?.data?.coinsAdded ?? 0;
   },
 
   // "Restore Purchases" — required by Apple for non-consumables. Re-syncs

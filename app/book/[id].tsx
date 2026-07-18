@@ -270,24 +270,47 @@ export default function BookDetailScreen() {
     );
   };
 
-  // ── iOS: Apple In-App Purchase flow (guideline 3.1.1) ─────────
-  const handleBuyIOS = async () => {
+  // ── iOS: unlock the whole book by spending coins (guideline 3.1.1) ─────
+  // Digital content on iOS is bought with coins (coins are purchased via Apple
+  // IAP in the wallet). If the user lacks enough coins, send them to the wallet.
+  const handleUnlockWithCoins = async () => {
     if (!book) return;
     if (!user?.id) { promptSignIn(); return; }
+    const cost = Number((book as any).coin_price ?? book.price_inr ?? 0);
+    const balance = Number(user.coin_balance ?? 0);
+    if (balance < cost) {
+      Alert.alert(
+        'Not enough coins',
+        `Unlocking "${book.title}" costs ${cost} coins. You have ${balance}. Would you like to buy coins?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Buy Coins', onPress: () => router.push('/wallet') },
+        ],
+      );
+      return;
+    }
     setPurchaseLoading(true);
     try {
-      await iapService.purchase(id, iapPurchaseType(book), iapProductId(book));
+      const pType = iapPurchaseType(book); // 'ebook' | 'audiobook'
+      const result = await walletService.unlockBook(id, pType);
       setIsPurchased(true);
-      Alert.alert('Purchase Complete', `"${book.title}" has been added to your library. Enjoy!`);
+      const newBalance = result?.wallet?.availableCoins;
+      if (typeof newBalance === 'number') dispatch(updateCoinBalance(newBalance));
+      Alert.alert('Unlocked', `"${book.title}" has been added to your library. Enjoy!`);
     } catch (err: any) {
-      const code = err?.code ?? '';
-      const msg = String(err?.message ?? '');
-      // User closed the Apple payment sheet — not an error.
-      if (code === 'E_USER_CANCELLED' || /cancel/i.test(msg)) return;
-      Alert.alert(
-        'Purchase Failed',
-        'Your purchase could not be completed. You have not been charged — please try again, or contact support if the problem continues.',
-      );
+      const msg = err?.response?.data?.message || err?.message || '';
+      if (/insufficient/i.test(String(msg))) {
+        Alert.alert(
+          'Not enough coins',
+          `You need more coins to unlock this. Would you like to buy coins?`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Buy Coins', onPress: () => router.push('/wallet') },
+          ],
+        );
+      } else {
+        Alert.alert('Unlock Failed', 'This unlock could not be completed. Please try again.');
+      }
     } finally {
       setPurchaseLoading(false);
     }
@@ -316,7 +339,7 @@ export default function BookDetailScreen() {
 
   const handleBuy = async () => {
     if (!book) return;
-    if (IS_IOS) { await handleBuyIOS(); return; }
+    if (IS_IOS) { await handleUnlockWithCoins(); return; }
     if (!user?.id) { promptSignIn(); return; }
     setPurchaseLoading(true);
     try {
@@ -560,9 +583,17 @@ export default function BookDetailScreen() {
   };
 
   const showUnlockPrompt = (chapter: Chapter) => {
-    // Coin unlocks bypass Apple IAP — not offered on iOS (guideline 3.1.1)
+    // iOS: whole-book unlock with coins (coins bought via Apple IAP).
     if (IS_IOS) {
-      Alert.alert('Chapter Locked', 'This chapter is not available yet.');
+      const cost = Number((book as any)?.coin_price ?? book?.price_inr ?? 0);
+      Alert.alert(
+        'Unlock this book',
+        `Unlock "${book?.title}" for ${cost} coins to read all chapters.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: `Unlock (${cost} coins)`, onPress: () => handleUnlockWithCoins() },
+        ],
+      );
       return;
     }
     Alert.alert(
@@ -818,7 +849,7 @@ export default function BookDetailScreen() {
                     : book.access_type === AccessType.PAID
                     ? isPurchased
                       ? 'PURCHASED'
-                      : (IS_IOS && iapPrice) ? iapPrice : `₹${book.price_inr ?? 0}`
+                      : IS_IOS ? `${(book as any).coin_price ?? book.price_inr ?? 0} COINS` : `₹${book.price_inr ?? 0}`
                     : book.access_type === AccessType.COINS
                     ? `${book.coin_price} COINS`
                     : book.access_type === AccessType.PREMIUM
@@ -898,7 +929,7 @@ export default function BookDetailScreen() {
                   ) : (
                     <Text style={styles.buyButtonText}>
                       {IS_IOS
-                        ? `Buy ${iapPrice ?? `₹${book.price_inr ?? 0}`}`
+                        ? `Unlock • ${(book as any).coin_price ?? book.price_inr ?? 0} coins`
                         : `Buy ₹${appliedCoupon ? appliedCoupon.finalAmount : (book.price_inr ?? 0)}`}
                     </Text>
                   )}
